@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Jobs Search (Popup View)</title>
+  <style>
+    :root{
+  --accent:#2196f3;
+  --bg:#0d1117;
+  --panel:#11131a;
+  --panel-2:#141823;
+  --ink:#e9eef5;
+  --ink-dim:#c7d3e0;
+  --ink-soft:#9fb3c8;
+  --row-a:#161a23;
+  --row-b:#121621;
+  --hairline:#242a35;
+  --field:#1b2230;
+  --field-bd:#2a3a54;
+  --overlay:rgba(0,0,0,.72);
+  --shadow:0 18px 80px rgba(0,0,0,.55), 0 0 40px rgba(33,150,243,.10);
+  --popup-scale:.85; /* 85% of current size */
+}
+
+*{ box-sizing:border-box }
+html,body{
+  margin:0; padding:0; background:var(--bg); color:var(--ink);
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+}
+:focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
+
+/* --- Search bar --- */
+.search-box{
+  margin:16px; padding:14px; border-radius:18px; background:var(--panel);
+  display:flex; gap:10px; align-items:center; box-shadow:var(--shadow);
+}
+.search-box select,
+.search-box input{
+  background:#1b1f2a; color:var(--accent);
+  border:0; outline:2px solid var(--accent); outline-offset:0;
+  padding:10px 12px; border-radius:12px;
+}
+.search-box input{
+  color:#fff; font-weight:700; flex:1;
+}
+.search-box button{
+  background:var(--accent); color:#0b0b0b; border:0; padding:10px 18px;
+  border-radius:14px; font-weight:700; cursor:pointer;
+}
+.search-box button:hover{ filter:brightness(1.05) }
+
+/* --- Results table (single page scroll) --- */
+.results-wrapper{ margin:0 16px 16px }
+table{ width:100%; border-collapse:separate; border-spacing:0 8px }
+thead th{
+  position:sticky; top:0; z-index:2; background:var(--panel-2);
+  color:#fff; text-align:left; padding:10px 12px; font-size:13px;
+  border-radius:10px; box-shadow:0 2px 0 rgba(0,0,0,.25);
+  cursor:pointer; user-select:none;
+}
+
+/* Rows + subtle divider */
+tbody tr{ position:relative; background:var(--row-bg,var(--row-a)); }
+tbody tr.alt{ background:var(--row-bg-alt,var(--row-b)); }
+tbody td{ padding:12px; font-size:14px }
+tbody tr::after{
+  content:""; display:block; height:1px; background:var(--hairline);
+  margin:0 8px; opacity:.6;
+}
+
+/* Left color strip (reliable + printable) */
+tbody td:first-child{ padding-left:16px; position:relative; }
+tbody td:first-child::before{
+  content:""; position:absolute; left:0; top:4px; bottom:4px; width:6px;
+  border-radius:6px; background:var(--strip,#2a2f3a); opacity:.95; pointer-events:none;
+}
+
+.client{ font-weight:800 } /* color set per-client via JS */
+.job{
+  color:var(--accent)!important; text-decoration:underline; cursor:pointer; font-weight:700;
+}
+.job:hover{ filter:brightness(1.15) }
+.job:focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
+
+.size,.sheet{ font-weight:700 }
+
+/* --- Loading overlay --- */
+#loadingOverlay{
+  display:none; position:fixed; inset:0; background:var(--overlay);
+  align-items:center; justify-content:center; z-index:1000;
+}
+#loadingOverlay .spinner{
+  width:66px; height:66px; border-radius:50%;
+  border:6px solid #2a2f3a; border-top:6px solid var(--accent);
+  animation:spin 1s linear infinite;
+}
+@keyframes spin{ to{ transform:rotate(360deg) } }
+@media (prefers-reduced-motion:reduce){
+  #loadingOverlay .spinner{ animation-duration:1.5s }
+}
+
+/* --- Modal --- */
+body.modal-open{ overflow:hidden }
+.backdrop{
+  position:fixed; inset:0; background:var(--overlay);
+  display:flex; align-items:center; justify-content:center; z-index:1100;
+}
+.card{
+  width:min(560px,92vw); max-height:92vh; overflow:auto;
+  background:linear-gradient(180deg,#0f1624 0%, #0c1220 100%);
+  box-shadow:var(--shadow); border-radius:16px; padding:20px 18px;
+  transform:scale(var(--popup-scale)); transform-origin:center; will-change:transform;
+}
+.head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px }
+.title{ font-size:26px; font-weight:700; color:#d9ecff; letter-spacing:.2px }
+.actions{ display:flex; gap:8px }
+.icon-btn{
+  width:36px; height:36px; border-radius:50%; background:#172131; display:grid; place-items:center;
+  border:1px solid rgba(156,211,255,.18); cursor:pointer;
+}
+.icon-btn:hover{ filter:brightness(1.15) }
+.client-name{ color:var(--accent); font-weight:700; margin:6px 0 14px }
+
+/* Details grid (layout-only) */
+.kv{
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:10px; grid-auto-flow:row dense;
+}
+.kv .pair{ display:grid; grid-template-rows:auto auto; gap:4px }
+.kv .pair.span-full{ grid-column:1 / -1 }
+@media (max-width:640px){ .kv{ grid-template-columns:1fr } }
+
+.k{ color:var(--ink-soft); font-size:12px; letter-spacing:.5px }
+.v{
+  color:#fff; font-weight:600; font-size:15px; padding:5px 12px;
+  border-radius:5px; background:var(--field); border:1px solid var(--field-bd);
+}
+
+/* Search highlight */
+mark.hl{ background:#284a9b; color:#fff; padding:0 2px; border-radius:3px }
+
+/* Keyboard selection */
+#tbodyRows tr.row-selected{ outline:2px solid var(--accent); outline-offset:-2px }
+
+/* Copy button inside .v */
+.kv .v{ position:relative }
+.kv .v .copy-btn{
+  position:absolute; right:6px; top:2px; width:28px; height:28px;
+  display:grid; place-items:center; background:#172131;
+  border:1px solid rgba(156,211,255,.18); border-radius:6px;
+  cursor:pointer; opacity:.85;
+}
+.kv .v .copy-btn:hover{ opacity:1 }
+
+/* Sheet tag chips */
+.sheet-tag{
+  display:inline-block; padding:2px 10px; border-radius:999px;
+  font-size:12px; font-weight:600; letter-spacing:.2px; line-height:1.4;
+}
+.sheet-tag.jobs{
+  background:rgba(57,255,20,.18); color:#d9ffdc;
+  border:1px solid rgba(57,255,20,.45); box-shadow:0 0 0 1px rgba(57,255,20,.08) inset;
+}
+.sheet-tag.hl{
+  background:rgba(255,71,87,.18); color:#ffe3e5;
+  border:1px solid rgba(255,71,87,.45); box-shadow:0 0 0 1px rgba(255,71,87,.08) inset;
+}
+
+/* ---- Print basics (new-window print flow ke saath compatible) ---- */
+@media print{
+  .title{ color:#000 !important }              /* job name black on print */
+  .actions, .copy-btn, [data-close]{ display:none !important }
+  *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  .kv .pair{ break-inside: avoid; page-break-inside: avoid; }
+}
+/* Mobile: show only first 4 columns, hide the rest */
+@media (max-width: 640px){
+  #resultsTable th:nth-child(n+5),
+  #resultsTable td:nth-child(n+5){
+    display:none !important;
+  }
+}
+  </style>
+</head>
+<body>
+
+  <!-- Loader -->
+  <div id="loadingOverlay"><div class="spinner"></div></div>
+
+<!-- Search -->
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="Search..." />
+  <button id="searchBtn">Search</button>
+</div>
+
+  <!-- Results -->
+  <div class="results-wrapper">
+    <table id="resultsTable" role="table" aria-label="Search results">
+      <thead><tr id="theadRow"></tr></thead>
+      <tbody id="tbodyRows"></tbody>
+    </table>
+  </div>
+
+
+<script>
+/* ====================== CONFIG ====================== */
+const DEPLOY_URL = "https://script.google.com/macros/s/AKfycbzPi05xGwTNemazmfb0IS9JbSFLNMxJIi2vqQuwlYbWMxsz81SatgwHdSnSUYl6XDAgMw/exec";
+
+const COLUMNS = [
+  ["Client Name","clientName"],
+  ["Job Name","jobName"],
+  ["Box Size","boxSize"],
+  ["Sheet Size","sheetSize"],
+  ["Ups","ups"],
+  ["Colors","colors"],
+  ["GSM","gsm"],
+  ["Board","board"],
+  ["Sheet","sheetName"],
+];
+
+// --- Popup field order (label -> canonical key from backend) ---
+const FIELD_ORDER = [
+  ["Date","date"], ["PO Date","poDate"], ["Sheet Size (Inches)","sheetSize"],
+  ["L × W × H (mm)","boxSize"], ["Job Type","jobType"], ["Die","die"],
+  ["Box Qty","boxQty"], ["Sheet Qty","sheetQty"], ["Ups","ups"],
+  ["Colors","colors"], ["GSM","gsm"], ["Board","board"],
+  ["Pasting","pasting"], ["Box Type","boxType"],
+  ["Varnish","varnish"], ["Finishing","finishing"],
+  ["Remarks","remarks"], ["Job ID","jobId"],   // render me skip hoga
+];
+
+/* ====================== UTIL ====================== */
+// empty guard: null/undefined/"" hide — lekin "0" ko mat hide karo
+function isEmptyValue(v){ if (v===null || v===undefined) return true; return String(v).trim()===""; }
+
+function escapeHTML(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+function escapeRegExp(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function highlightHTML(text, term){
+  if (!term) return escapeHTML(text);
+  const re = new RegExp(escapeRegExp(term), "ig");
+  return escapeHTML(text).replace(re, m=>`<mark class="hl">${m}</mark>`);
+}
+
+/* ---- localStorage (safe) ---- */
+const store = {
+  get(k, d=null){
+    try{
+      const raw = localStorage.getItem(k);
+      return raw == null ? d : JSON.parse(raw);
+    }catch{ return d; }
+  },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} }
+};
+const LS_SORT_KEY  = "find.sort";
+const LS_QUERY_KEY = "find.query";
+const DEFAULT_SORT = { key:null, asc:true };
+function getPersistedSort(){
+  const v = store.get(LS_SORT_KEY, DEFAULT_SORT);
+  return (v && typeof v === "object" && "key" in v && "asc" in v) ? v : DEFAULT_SORT;
+}
+
+/* ====================== COLORS (CLIENT) ====================== */
+const CLIENT_PALETTE = ["#ff7a00","#00e5ff","#007bff","#a020f0","#00ffc8","#ffd500","#00ff66"];
+const clientColorMap = new Map();
+
+function colorForClient(name){
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2196f3";
+  if (!name || !String(name).trim()) return accent;
+  const key = String(name).trim();
+  if (!clientColorMap.has(key)){
+    const idx = clientColorMap.size % CLIENT_PALETTE.length;
+    clientColorMap.set(key, CLIENT_PALETTE[idx]);
+  }
+  return clientColorMap.get(key);
+}
+function hexToRgb(hex){
+  const h = String(hex||"").replace("#","");
+  const n = h.length===3 ? h.split("").map(x=>x+x).join("") : h;
+  const num = parseInt(n||"0",16);
+  return { r:(num>>16)&255, g:(num>>8)&255, b:num&255 };
+}
+const rgbToCss = ({r,g,b}) => `rgb(${r}, ${g}, ${b})`;
+const mixRgb   = (a,b,t) => ({ r:Math.round(a.r*(1-t)+b.r*t), g:Math.round(a.g*(1-t)+b.g*t), b:Math.round(a.b*(1-t)+b.b*t) }); // ✅ fixed
+function darkStripFromClient(hex, factor=0.58){ const c=hexToRgb(hex); return rgbToCss(mixRgb(c,{r:0,g:0,b:0},factor)); }
+function tintRowBg(baseHex, clientHex, t=0.14){ const base=hexToRgb(baseHex), cc=hexToRgb(clientHex); return rgbToCss(mixRgb(base,cc,t)); }
+
+/* ====================== STATE ====================== */
+let data = [];
+let sortState     = getPersistedSort();
+let viewRows      = [];         // render copy (keyboard nav)
+let selectedIndex = -1;         // keyboard selection
+let lastQuery     = store.get(LS_QUERY_KEY, "");
+
+/* ====================== DOM READY ====================== */
+document.addEventListener("DOMContentLoaded", () => {
+  // Build table header
+  const thead = document.getElementById("theadRow");
+  thead.innerHTML = "";
+  COLUMNS.forEach(([label, key]) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    th.addEventListener("click", () => sortBy(key));
+    thead.appendChild(th);
+  });
+
+  // Input focus + prefill lastQuery
+  const input = document.getElementById("searchInput");
+  input.value = lastQuery || "";
+  input.addEventListener("focus", () => input.select());
+  input.focus(); setTimeout(() => input.select(), 0);
+
+  // Button click
+  document.getElementById("searchBtn").addEventListener("click", fetchData);
+
+  // Enter key trigger
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fetchData(); } });
+
+  // Live search (debounced)
+  let tId;
+  input.addEventListener("input", () => { clearTimeout(tId); tId = setTimeout(fetchData, 300); });
+
+  // Keyboard navigation for table
+  document.addEventListener("keydown", (e)=>{
+    const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+    if (!viewRows.length) return;
+
+    if (e.key === "ArrowDown"){
+      e.preventDefault();
+      selectedIndex = Math.min(viewRows.length-1, (selectedIndex<0?0:selectedIndex+1));
+      updateRowSelection();
+    } else if (e.key === "ArrowUp"){
+      e.preventDefault();
+      selectedIndex = Math.max(0, (selectedIndex<=0?0:selectedIndex-1));
+      updateRowSelection();
+    } else if (e.key === "Enter"){
+      e.preventDefault();
+      if (selectedIndex>=0) openModal(viewRows[selectedIndex]);
+    } else if (e.key === "Escape"){
+      const back = document.getElementById("findModalBackdrop");
+      if (back) back.remove();
+      document.body.classList.remove("modal-open");
+    }
+  }, true);
+
+  hideLoading(); // ensure hidden initially
+
+  // Auto fetch if lastQuery available
+  if ((lastQuery||"").trim()) fetchData();
+});
+
+/* ====================== LOADING/ERROR ====================== */
+function showLoading(){ const el=document.getElementById("loadingOverlay"); if(el) el.style.display="flex"; }
+function hideLoading(){ const el=document.getElementById("loadingOverlay"); if(el) el.style.display="none"; }
+
+function showError(msg){
+  const tbody = document.getElementById("tbodyRows");
+  if (tbody){
+    tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" style="color:#f66;text-align:center;padding:24px">${msg}</td></tr>`;
+  } else {
+    const box = document.querySelector(".results-container");
+    if (box) box.innerHTML = `<div style="color:#f66;text-align:center;padding:16px">${msg}</div>`;
+  }
+}
+
+/* ====================== FETCH ====================== */
+function fetchData(){
+  const term  = document.getElementById("searchInput").value.trim();
+  lastQuery = term; store.set(LS_QUERY_KEY, lastQuery);
+  const field = "ALL";
+
+  showLoading();
+
+  google.script.run
+    .withSuccessHandler(rows => {
+      try {
+        const arr = Array.isArray(rows) ? rows : (rows ? [rows] : []);
+        data = arr.map(r => ({
+          clientName: String(r.clientName ?? ""),
+          jobName:    String(r.jobName ?? ""),
+          boxSize:    String(r.boxSize ?? ""),
+          sheetSize:  String(r.sheetSize ?? ""),
+          ups:        String(r.ups ?? ""),
+          colors:     String(r.colors ?? ""),
+          gsm:        String(r.gsm ?? ""),
+          board:      String(r.board ?? ""),
+          // popup fields:
+          varnish:    String(r.varnish ?? ""),
+          finishing:  String(r.finishing ?? ""),
+          pasting:    String(r.pasting ?? ""),
+          boxType:    String(r.boxType ?? ""),
+          boxQty:     String(r.boxQty ?? ""),
+          sheetQty:   String(r.sheetQty ?? ""),
+          remarks:    String(r.remarks ?? ""),
+          jobId:      String(r.jobId ?? ""),
+          sheetName:  String(r.sheetName ?? ""),
+          date:       String(r.date ?? ""),
+          poDate:     String(r.poDate ?? ""),
+          jobType:    String(r.jobType ?? ""),
+          die:        String(r.die ?? "")
+        }));
+
+        // apply persisted sort if available
+        if (sortState && sortState.key){
+          const {key, asc} = sortState;
+          data = [...data].sort((a,b)=>{
+            const A=(a[key]??"").toString().toLowerCase();
+            const B=(b[key]??"").toString().toLowerCase();
+            if (A<B) return asc?-1:1;
+            if (A>B) return asc? 1:-1;
+            return 0;
+          });
+        }
+        render(data);
+      } catch(e){
+        console.error(e);
+        showError("Render error: " + e.message);
+      } finally { hideLoading(); }
+    })
+    .withFailureHandler(err => {
+      console.error(err);
+      hideLoading();
+      const msg = (err && (err.message || (err.toString && err.toString()))) ? (err.message || err.toString()) : "Unknown error";
+      showError("Server error: " + msg);
+    })
+    .searchJobs(term, field);
+}
+
+/* ====================== SORT ====================== */
+function sortBy(key){
+  const prev = sortState || DEFAULT_SORT;
+  const same = (prev.key === key);
+  sortState = { key, asc: same ? !prev.asc : true };
+  store.set(LS_SORT_KEY, sortState);
+
+  const sorted = [...data].sort((a,b)=>{
+    const A=(a[key]??"").toString().toLowerCase();
+    const B=(b[key]??"").toString().toLowerCase();
+    if (A<B) return sortState.asc?-1:1;
+    if (A>B) return sortState.asc? 1:-1;
+    return 0;
+  });
+  render(sorted);
+}
+
+/* ====================== RENDER (TABLE) ====================== */
+function render(rows){
+  const tbody = document.getElementById("tbodyRows");
+  tbody.innerHTML = "";
+  viewRows = rows.slice(0);
+
+  if (!rows.length){
+    tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" style="text-align:center;color:#9aa7b4;padding:24px">No results found</td></tr>`;
+    selectedIndex = -1;
+    return;
+  }
+
+  rows.forEach((item, idx) => {
+    const tr = document.createElement("tr");
+    if (idx % 2) tr.classList.add("alt");
+    tr.dataset.index = idx;
+
+    const clientHex = colorForClient(item.clientName);
+    const strip     = darkStripFromClient(clientHex, 0.58);
+    tr.style.setProperty("--strip", strip);
+    const rowA = "#161a23", rowB = "#121621";
+    if (idx % 2 === 0) tr.style.setProperty("--row-bg",     tintRowBg(rowA, clientHex, 0.14));
+    else               tr.style.setProperty("--row-bg-alt", tintRowBg(rowB, clientHex, 0.10));
+
+    COLUMNS.forEach(([label, key]) => {
+      const td  = document.createElement("td");
+      const raw = (item[key] ?? "").toString();
+
+      if (key === "clientName") {
+        td.className = "client";
+        td.innerHTML = highlightHTML(raw, lastQuery);
+        td.style.color = clientHex;
+      } else if (key === "jobName") {
+        td.className = "job";
+        td.innerHTML = highlightHTML(raw || "(No Job)", lastQuery);
+        td.style.color = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2196f3";
+        td.addEventListener("click", () => openModal(item));
+        td.tabIndex = 0; td.setAttribute("role","button");
+        td.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModal(item); } });
+      } else if (key === "sheetName") {
+        const span = document.createElement("span");
+        const isHL = (raw.trim().toUpperCase() === "HL");
+        span.className = "sheet-tag " + (isHL ? "hl" : "jobs");
+        span.innerHTML = highlightHTML(raw || "Jobs", lastQuery);
+        td.appendChild(span);
+      } else {
+        td.innerHTML = highlightHTML(raw, lastQuery);
+        if (key === "boxSize")   td.classList.add("size");
+        if (key === "sheetSize") td.classList.add("sheet");
+        if (key === "ups")       td.classList.add("ups");
+        if (key === "colors")    td.classList.add("colors");
+        if (key === "gsm")       td.classList.add("gsm");
+        if (key === "board")     td.classList.add("board");
+      }
+
+      tr.appendChild(td);
+    });
+
+    tr.addEventListener("mouseenter", ()=>{ selectedIndex = idx; updateRowSelection(false); });
+    tr.addEventListener("dblclick", ()=> openModal(item));
+
+    tbody.appendChild(tr);
+  });
+
+  selectedIndex = Math.max(0, Math.min(selectedIndex, rows.length-1));
+  updateRowSelection(false);
+}
+
+function updateRowSelection(scroll=true){
+  const rows = document.querySelectorAll("#tbodyRows tr");
+  rows.forEach((tr, i) => tr.classList.toggle("row-selected", i===selectedIndex));
+  if (scroll && selectedIndex>=0){
+    rows[selectedIndex]?.scrollIntoView({ block:"nearest" });
+  }
+}
+
+/* ====================== MODAL + ACTIONS ====================== */
+function svg(icon){
+  if (icon === "edit"){
+    return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e6f0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`;
+  }
+  if (icon === "print"){
+    return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e6f0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18h12v4H6z"/><path d="M6 14h12a4 4 0 0 0 4-4v0a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v0a4 4 0 0 0 4 4z"/></svg>`;
+  }
+  if (icon === "copy"){
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#cfe2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  }
+  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e6f0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+}
+
+function closeModal() {
+  const back = document.getElementById("findModalBackdrop");
+  if (back) back.remove();
+  document.body.classList.remove("modal-open");
+  document.removeEventListener("keydown", _escHandler, true);
+}
+
+function _escHandler(e){ if (e.key === "Escape") { e.preventDefault(); closeModal(); } }
+
+function openModal(item){
+  // ensure only one modal
+  closeModal();
+  document.body.classList.add("modal-open");
+
+  // backdrop
+  const backdrop = document.createElement("div");
+  backdrop.className = "backdrop";
+  backdrop.id = "findModalBackdrop";
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+
+  // card
+  const card = document.createElement("div");
+  card.className = "card";
+
+  // header
+  const head  = document.createElement("div"); head.className = "head";
+  const title = document.createElement("div"); title.className = "title";
+  title.textContent = item.jobName || "Job";
+
+  const actions = document.createElement("div"); actions.className = "actions";
+  // print
+  const printBtn = document.createElement("button");
+  printBtn.className = "icon-btn"; printBtn.type = "button";
+  printBtn.innerHTML = svg("print"); printBtn.title = "Print / Save PDF";
+  printBtn.addEventListener("click", ()=> printModalInline130(card, { scale:1.7, marginMM:10, clamp:true }));
+  // close
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "icon-btn"; closeBtn.type = "button";
+  closeBtn.innerHTML = svg(); closeBtn.title = "Close";
+  closeBtn.setAttribute("data-close", "1");
+  closeBtn.addEventListener("click", closeModal);
+
+  head.appendChild(title);
+  actions.append(printBtn, closeBtn);
+  head.appendChild(actions);
+
+  // client line
+  const clientEl = document.createElement("div");
+  clientEl.className = "client-name";
+  clientEl.textContent = item.clientName || "";
+  clientEl.style.color = colorForClient(item.clientName);
+
+  // fields container (2-col via CSS)
+  const kv = document.createElement("div");
+  kv.className = "kv";
+
+  // build pairs from FIELD_ORDER
+  FIELD_ORDER.forEach(([label, key]) => {
+    if (key === "jobId") return;         // hide Job ID
+    const val = item?.[key];
+    if (isEmptyValue(val)) return;
+
+    const pair = document.createElement("div");
+    pair.className = "pair" + (key === "remarks" ? " span-full" : "");
+
+    const kEl = document.createElement("div");
+    kEl.className = "k";
+    kEl.textContent = (label.toUpperCase()) + ":";
+
+    const vEl = document.createElement("div");
+    vEl.className = "v";
+    vEl.innerHTML = `
+      <span class="v-text">${escapeHTML(String(val))}</span>
+      <button class="copy-btn" type="button" title="Copy" data-copy>${svg("copy")}</button>
+    `;
+
+    pair.append(kEl, vEl);
+    kv.appendChild(pair);
+  });
+
+  // copy handler (delegation)
+  kv.addEventListener("click", async (e)=>{
+    const btn = e.target.closest("[data-copy]");
+    if (!btn) return;
+    const text = btn.closest(".pair")?.querySelector(".v .v-text")?.textContent || "";
+    try{
+      await navigator.clipboard.writeText(text);
+      btn.style.transform = "scale(1.06)";
+      setTimeout(()=> btn.style.transform = "scale(1)", 120);
+      btn.title = "Copied!";
+      setTimeout(()=> btn.title = "Copy", 800);
+    }catch(err){
+      console.warn("Clipboard failed:", err);
+      btn.title = "Copy failed";
+    }
+  });
+
+  // mount
+  card.append(head);
+  if (clientEl.textContent) card.appendChild(clientEl);
+  card.appendChild(kv);
+  backdrop.appendChild(card);
+  document.body.appendChild(backdrop);
+
+  // Esc key to close
+  document.addEventListener("keydown", _escHandler, true);
+}
+
+// mm → px @ 96dpi
+const mm2px = mm => (mm * 96) / 25.4;
+
+/**
+ * Direct print (no new tab):
+ * - White mode, Title black
+ * - 130% scale (clamp optional)
+ * - TOP-CENTER aligned
+ * - Hides actions/copy/close in print
+ */
+function printModalInline130(card, opts={ scale:1.3, marginMM:10, clamp:true }){
+  if (!card) { alert("Modal not found."); return; }
+
+  const desired  = Number(opts.scale) || 1.3;
+  const marginMM = Number(opts.marginMM) || 10;
+  const clamp    = opts.clamp !== false;
+
+  // 1) Overlay root (same document) → TOP-CENTER
+  const root = document.createElement('div');
+  root.id = 'print-root-inline';
+  Object.assign(root.style, {
+    position:'fixed', inset:'0', zIndex:'99999',
+    display:'flex', alignItems:'flex-start', justifyContent:'center', // ⬅️ TOP + CENTER
+    background:'transparent', opacity:'0', pointerEvents:'none'
+  });
+
+  // 2) Clone card and strip controls
+  const clone = card.cloneNode(true);
+  clone.querySelector('.actions')?.remove();
+  clone.querySelectorAll('.copy-btn,[data-close]').forEach(el => el.remove());
+
+  // 3) Scale wrapper (TOP-CENTER origin)
+  const wrap = document.createElement('div');
+  wrap.id = 'print-scale-wrap';
+  Object.assign(wrap.style, {
+    transformOrigin:'top center',   // ⬅️ anchor at top-centre
+    display:'inline-block'
+  });
+  wrap.appendChild(clone);
+  root.appendChild(wrap);
+
+  // 4) Print-only CSS
+  const style = document.createElement('style');
+  style.media = 'print';
+style.textContent = `
+  @page { size: A4 portrait; margin: ${marginMM}mm; }
+
+  /* PAGE ko white karo */
+  html, body{ background:#fff !important; color:#111 !important; }
+
+  /* Sirf hamara print root visible + WHITE backdrop */
+  body *{ visibility:hidden !important; }
+  #print-root-inline,
+  #print-root-inline *{ visibility:visible !important; }
+  #print-root-inline{
+    opacity:1 !important;
+    background:#fff !important;        /* ✅ outer area white */
+  }
+
+  /* White mode + gradient off */
+  #print-root-inline .card{
+    background:#fff !important;         /* ✅ background-color white */
+    background-image:none !important;   /* ✅ gradient kill */
+    box-shadow:none !important;
+    border-radius:0 !important;
+  }
+  #print-root-inline .title{ color:#000 !important; }   /* job name black */
+  #print-root-inline .k{ color:#555 !important; }
+  #print-root-inline .v{
+    background:#fff !important;
+    border:1px solid #ddd !important;
+    color:#111 !important;
+  }
+
+  /* Controls hide */
+  #print-root-inline .actions,
+  #print-root-inline .copy-btn,
+  #print-root-inline [data-close]{ display:none !important; }
+
+  /* Fallback grid (agar main CSS na load ho) */
+  #print-root-inline .kv{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  #print-root-inline .kv .pair{ display:grid; grid-template-rows:auto auto; gap:4px; }
+  #print-root-inline .kv .pair.span-full{ grid-column:1 / -1; }
+
+  *{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+`;
+
+  document.head.appendChild(style);
+
+  // 5) Mount overlay
+  document.body.appendChild(root);
+
+  // 6) Measure, freeze, scale, print
+  requestAnimationFrame(()=>{
+    const cardEl = root.querySelector('.card');
+    if (!cardEl){ window.print(); cleanup(); return; }
+
+    const rect = cardEl.getBoundingClientRect();
+    const w = Math.max(1, rect.width);
+    const h = Math.max(1, rect.height);
+
+    Object.assign(cardEl.style, { width: w+'px', maxWidth: w+'px', maxHeight:'unset' });
+    Object.assign(wrap.style, { width: w+'px', height: h+'px' });
+
+    const PAGE_W = mm2px(210), PAGE_H = mm2px(297);
+    const MARGIN = mm2px(marginMM);
+    const availW = PAGE_W - 2*MARGIN;
+    const availH = PAGE_H - 2*MARGIN;
+    const fit = Math.min(availW / w, availH / h);
+
+    const scale = clamp ? Math.min(desired, fit) : desired;
+    wrap.style.transform = `scale(${scale})`;
+
+    setTimeout(()=>{ window.print(); setTimeout(cleanup, 100); }, 60);
+  });
+
+  function cleanup(){
+    try{ document.head.removeChild(style); }catch{}
+    try{ document.body.removeChild(root); }catch{}
+  }
+  window.addEventListener('afterprint', cleanup, { once:true });
+}
+
+</script>
+
+<!-- IFRAME receiver stays same (tumhara neeche wala <script> block theek hai) -->
+
+<script>
+/* ===== IFRAME Receiver: respond to parent messages + local shortcuts ===== */
+(function(){
+  // Parent → child bridge
+  window.addEventListener('message', function(evt){
+    const msg = evt?.data;
+    if (!msg || typeof msg!=='object') return;
+
+    if (msg.type === 'FOCUS_SEARCH'){
+      const el = document.getElementById('searchInput');
+      if (el){ el.focus(); el.select?.(); }
+    }
+    if (msg.type === 'REFRESH_SEARCH'){
+      (window.fetchData || function(){}) ();
+    }
+    if (msg.type === 'APP_SAVE'){
+      // Find page pe save usually nahi hota — ignore ya feedback
+      // Agar yahan koi “quick save” karwana ho to yahan handle kar sakte ho.
+    }
+  }, false);
+
+  // Local guard: iframe ke andar bhi Ctrl/Cmd+R/F/K chalay
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+  document.addEventListener('keydown', function(e){
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase()==='r'){
+      e.preventDefault(); e.stopPropagation();
+      (window.fetchData || function(){}) ();
+    }
+    if (mod && !e.shiftKey && !e.altKey &&
+        (e.key.toLowerCase()==='f' || e.key.toLowerCase()==='k')){
+      e.preventDefault(); e.stopPropagation();
+      const el = document.getElementById('searchInput');
+      if (el){ el.focus(); el.select?.(); }
+    }
+  }, true);
+})();
+</script>
+
+</body>
+</html>
